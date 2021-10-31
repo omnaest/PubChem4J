@@ -6,9 +6,11 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
 import java.util.Map;
+import java.util.Optional;
 
 import org.junit.Ignore;
 import org.junit.Test;
+import org.omnaest.pubchem.rest.PubChemRestUtils.CidAndName;
 import org.omnaest.pubchem.rest.domain.Synonyms;
 
 /**
@@ -19,14 +21,25 @@ public class PubChemRestUtilsTest
 {
     @Test
     @Ignore
-    public void testNewInstance() throws Exception
+    public void testSynonyms() throws Exception
     {
-        Synonyms synonyms = PubChemRestUtils.newInstance()
-                                            .fetchSynonyms("tryptophan")
-                                            .get();
-        assertEquals(6305, synonyms.getCid());
-        assertTrue(synonyms.getSynonyms()
-                           .containsAll(Arrays.asList("L-tryptophan", "Indole-3-alanine")));
+        {
+            Synonyms synonyms = PubChemRestUtils.newInstance()
+                                                .fetchSynonyms("tryptophan")
+                                                .get();
+            assertEquals(6305, synonyms.getCid());
+            assertTrue(synonyms.getSynonyms()
+                               .containsAll(Arrays.asList("L-tryptophan", "Indole-3-alanine")));
+        }
+        {
+            Synonyms synonyms = PubChemRestUtils.newInstance()
+                                                .fetchSynonyms("lactate")
+                                                .get();
+            assertEquals(91435, synonyms.getCid());
+            System.out.println(synonyms.getSynonyms());
+            assertTrue(synonyms.getSynonyms()
+                               .containsAll(Arrays.asList("lactate", "(RS)-lactic acid")));
+        }
     }
 
     @Test
@@ -59,5 +72,51 @@ public class PubChemRestUtilsTest
         assertEquals("Pentalenate", result.get("70678937"));
         assertEquals("Phosphate", result.get("1061"));
         assertEquals("Adenosine-5'-triphosphate", result.get("5957"));
+    }
+
+    @Test
+    @Ignore
+    public void testFetchCidAndPrimaryNameByAnyName() throws Exception
+    {
+        Optional<CidAndName> compoundCidAndName = PubChemRestUtils.newInstance()
+                                                                  .withLocalCache()
+                                                                  .fetchCidAndPrimaryNameByAnyName("Lactate");
+        assertTrue(compoundCidAndName.isPresent());
+        assertEquals("lactate", compoundCidAndName.get()
+                                                  .getName());
+        assertEquals("91435", compoundCidAndName.get()
+                                                .getCid());
+
+        assertTrue(compoundCidAndName.get()
+                                     .getParent()
+                                     .isPresent());
+        assertEquals("lactic acid", compoundCidAndName.get()
+                                                      .getParent()
+                                                      .get()
+                                                      .getName());
+        assertEquals("612", compoundCidAndName.get()
+                                              .getParent()
+                                              .get()
+                                              .getCid());
+    }
+
+    @Test
+    @Ignore
+    public void testFetchCompoundCidByName() throws Exception
+    {
+        assertEquals("5249080", PubChemRestUtils.newInstance()
+                                                .withLocalCache()
+                                                .fetchCompoundCidByName("suberate")
+                                                .get());
+    }
+
+    @Test
+    @Ignore
+    public void testFetchCompoundParentCidByCid() throws Exception
+    {
+        assertEquals("10457", PubChemRestUtils.newInstance()
+                                              .withLocalCache()
+                                              .fetchCompoundParentCidByCid("5249080")
+                                              .get());
     }
 }

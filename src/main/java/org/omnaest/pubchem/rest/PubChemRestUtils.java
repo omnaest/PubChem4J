@@ -3,14 +3,23 @@ package org.omnaest.pubchem.rest;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import org.apache.commons.lang3.StringUtils;
+import org.omnaest.pubchem.rest.PubChemRestUtils.Compound.CompoundEntry;
+import org.omnaest.pubchem.rest.PubChemRestUtils.Compound.CompoundEntry.CompoundProperty;
+import org.omnaest.pubchem.rest.PubChemRestUtils.Compound.CompoundEntry.OuterId;
+import org.omnaest.pubchem.rest.PubChemRestUtils.Compound.CompoundEntry.OuterId.InnerId;
 import org.omnaest.pubchem.rest.domain.Synonyms;
 import org.omnaest.utils.CacheUtils;
+import org.omnaest.utils.ComparatorUtils;
 import org.omnaest.utils.JSONHelper;
 import org.omnaest.utils.StreamUtils;
 import org.omnaest.utils.cache.Cache;
@@ -32,7 +41,7 @@ public class PubChemRestUtils
         return new PubChemRestAccessor()
         {
             private Cache  cache   = null;
-            private String baseUrl = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/";
+            private String baseUrl = "https://pubchem.ncbi.nlm.nih.gov/rest/pug";
 
             @Override
             public PubChemRestAccessor withCache(Cache cache)
@@ -173,12 +182,235 @@ public class PubChemRestUtils
                                  .withRetry(10, 12, TimeUnit.SECONDS);
             }
 
+            @Override
+            public Optional<Compound> fetchCompoundByName(String compoundName)
+            {
+                RestClient restClient = this.newRestClient();
+
+                String url = RestClient.urlBuilder()
+                                       .setBaseUrl(this.baseUrl)
+                                       .addPathToken("compound")
+                                       .addPathToken("name")
+                                       .addPathToken(compoundName)
+                                       .addPathToken("JSON")
+                                       .build();
+                try
+                {
+                    LOG.debug("Fetching pubchem compound by name: " + compoundName);
+                    return restClient.request()
+                                     .toUrl(url)
+                                     .getAnd(Compound.class)
+                                     .handleStatusCode(404, holder -> null)
+                                     .asOptional();
+                }
+                catch (RESTAccessExeption e)
+                {
+                    if (e.getStatusCode() == 404)
+                    {
+                        LOG.error("Unable to find chemical compound for " + compoundName);
+                        return Optional.empty();
+                    }
+                    else
+                    {
+                        throw e;
+                    }
+                }
+            }
+
+            @Override
+            public Optional<String> fetchCompoundCidByName(String compoundName)
+            {
+                RestClient restClient = this.newRestClient();
+
+                String url = RestClient.urlBuilder()
+                                       .setBaseUrl(this.baseUrl)
+                                       .addPathToken("compound")
+                                       .addPathToken("name")
+                                       .addPathToken(compoundName)
+                                       .addPathToken("cids")
+                                       .addPathToken("JSON")
+                                       .build();
+                try
+                {
+                    LOG.debug("Fetching pubchem compound cid by name: " + compoundName);
+                    return restClient.request()
+                                     .toUrl(url)
+                                     .getAnd(JsonNode.class)
+                                     .handleStatusCode(404, holder -> null)
+                                     .handleStatusCode(400, holder -> null)
+                                     .asOptional()
+                                     .map(node -> node.findPath("IdentifierList"))
+                                     .map(node -> node.findPath("CID"))
+                                     .flatMap(informationArray -> JSONHelper.toArrayNode(informationArray)
+                                                                            .map(arrayNode -> arrayNode.get(0))
+                                                                            .map(JSONHelper.toObjectWithTypeMapper(String.class)));
+                }
+                catch (RESTAccessExeption e)
+                {
+                    if (e.getStatusCode() == 404)
+                    {
+                        LOG.error("Unable to find chemical compound cid for " + compoundName);
+                        return Optional.empty();
+                    }
+                    else
+                    {
+                        throw e;
+                    }
+                }
+            }
+
+            @Override
+            public Optional<String> fetchCompoundParentCidByCid(String cid)
+            {
+                RestClient restClient = this.newRestClient();
+
+                String url = RestClient.urlBuilder()
+                                       .setBaseUrl(this.baseUrl)
+                                       .addPathToken("compound")
+                                       .addPathToken("cid")
+                                       .addPathToken(cid)
+                                       .addPathToken("cids")
+                                       .addPathToken("JSON")
+                                       .addQueryParameter("cids_type", "parent")
+                                       .build();
+                try
+                {
+                    LOG.debug("Fetching pubchem compound parent cid by cid: " + cid);
+                    return restClient.request()
+                                     .toUrl(url)
+                                     .getAnd(JsonNode.class)
+                                     .handleStatusCode(404, holder -> null)
+                                     .handleStatusCode(400, holder -> null)
+                                     .asOptional()
+                                     .map(node -> node.findPath("IdentifierList"))
+                                     .map(node -> node.findPath("CID"))
+                                     .flatMap(informationArray -> JSONHelper.toArrayNode(informationArray)
+                                                                            .map(arrayNode -> arrayNode.get(0))
+                                                                            .map(JSONHelper.toObjectWithTypeMapper(String.class)));
+                }
+                catch (RESTAccessExeption e)
+                {
+                    if (e.getStatusCode() == 404)
+                    {
+                        LOG.error("Unable to find chemical parent cid for cid " + cid);
+                        return Optional.empty();
+                    }
+                    else
+                    {
+                        throw e;
+                    }
+                }
+            }
+
+            @Override
+            public Optional<CidAndName> fetchCidAndPrimaryNameByAnyName(String compoundName)
+            {
+                return this.fetchCidAndPrimaryNameByAnyName(compoundName, NameType.TRADITIONAL, NameType.PREFERRED);
+            }
+
+            @Override
+            public Optional<CidAndName> fetchOldestCidAndPrimaryNameByAnyName(String compoundName)
+            {
+                return this.fetchOldestCidAndPrimaryNameByAnyName(compoundName, NameType.TRADITIONAL, NameType.PREFERRED);
+            }
+
+            @Override
+            public Optional<CidAndName> fetchOldestCidAndPrimaryNameByAnyName(String compoundName, NameType... nameTypes)
+            {
+                Function<CompoundEntry, Long> cidExtractor = entry -> Optional.ofNullable(entry.getId())
+                                                                              .map(OuterId::getId)
+                                                                              .map(InnerId::getCid)
+                                                                              .orElse(999999999999l);
+                List<CompoundEntry> entries = this.fetchCompoundByName(compoundName)
+                                                  .map(Compound::getEntries)
+                                                  .orElse(Collections.emptyList())
+                                                  .stream()
+                                                  .sorted(ComparatorUtils.builder()
+                                                                         .of(cidExtractor)
+                                                                         .natural())
+                                                  .collect(Collectors.toList());
+                return this.determineCidAndPrimaryName(entries, nameTypes);
+            }
+
+            @Override
+            public Optional<CidAndName> fetchCidAndPrimaryNameByAnyName(String compoundName, NameType... nameTypes)
+            {
+                List<CompoundEntry> entries = this.fetchCompoundByName(compoundName)
+                                                  .map(Compound::getEntries)
+                                                  .orElse(Collections.emptyList());
+                return this.determineCidAndPrimaryName(entries, nameTypes);
+            }
+
+            private Optional<CidAndName> determineCidAndPrimaryName(List<CompoundEntry> entries, NameType... nameTypes)
+            {
+                return entries.stream()
+                              .findFirst()
+                              .flatMap(this.createCidAndPrimaryNameExtractor(entries.stream()
+                                                                                    .skip(1)
+                                                                                    .collect(Collectors.toList()),
+                                                                             nameTypes));
+            }
+
+            private Function<CompoundEntry, Optional<CidAndName>> createCidAndPrimaryNameExtractor(List<CompoundEntry> parentEntries, NameType... nameTypes)
+            {
+                return entry ->
+                {
+                    String name = Optional.ofNullable(entry.getProps())
+                                          .orElse(Collections.emptyList())
+                                          .stream()
+                                          .filter(property -> Optional.ofNullable(property)
+                                                                      .map(CompoundProperty::getUrn)
+                                                                      .map(urn -> StringUtils.equalsIgnoreCase("IUPAC Name", urn.getLabel()))
+                                                                      .orElse(false))
+                                          .filter(property -> Optional.ofNullable(property)
+                                                                      .map(CompoundProperty::getUrn)
+                                                                      .map(urn -> StringUtils.equalsAnyIgnoreCase(urn.getName(), Arrays.asList(nameTypes)
+                                                                                                                                       .stream()
+                                                                                                                                       .map(NameType::getIdentifier)
+                                                                                                                                       .toArray(String[]::new)))
+                                                                      .orElse(false))
+                                          .sorted(ComparatorUtils.builder()
+                                                                 .of(this.createNameTypePriorityFunction(nameTypes))
+                                                                 .natural())
+                                          .findFirst()
+                                          .map(property -> property.getValue()
+                                                                   .getSval())
+                                          .orElse(null);
+                    Optional<CidAndName> parent = this.determineCidAndPrimaryName(parentEntries, nameTypes);
+                    return Optional.ofNullable(entry.getId())
+                                   .map(OuterId::getId)
+                                   .map(InnerId::getCid)
+                                   .map(String::valueOf)
+                                   .map(cid -> new CidAndName(cid, name, parent));
+                };
+            }
+
+            private Function<CompoundProperty, Integer> createNameTypePriorityFunction(NameType... nameTypes)
+            {
+                return property -> Optional.ofNullable(property)
+                                           .map(CompoundProperty::getUrn)
+                                           .flatMap(urn -> IntStream.range(0, nameTypes.length)
+                                                                    .filter(index ->
+                                                                    {
+                                                                        return nameTypes[index].matches(urn.getName());
+                                                                    })
+                                                                    .boxed()
+                                                                    .findFirst())
+                                           .get();
+            }
+
         };
     }
 
     public static interface PubChemRestAccessor
     {
         public Optional<Synonyms> fetchSynonyms(String compoundName);
+
+        public Optional<Compound> fetchCompoundByName(String compoundName);
+
+        public Optional<CidAndName> fetchCidAndPrimaryNameByAnyName(String compoundName);
+
+        public Optional<CidAndName> fetchOldestCidAndPrimaryNameByAnyName(String compoundName);
 
         public PubChemRestAccessor withCache(Cache cache);
 
@@ -193,6 +425,214 @@ public class PubChemRestUtils
         public Stream<Description> fetchDescriptions(Collection<String> cids);
 
         public Stream<Description> fetchDescriptions(String... cid);
+
+        Optional<CidAndName> fetchCidAndPrimaryNameByAnyName(String compoundName, NameType... nameTypes);
+
+        Optional<CidAndName> fetchOldestCidAndPrimaryNameByAnyName(String compoundName, NameType... nameTypes);
+
+        Optional<String> fetchCompoundParentCidByCid(String cid);
+
+        Optional<String> fetchCompoundCidByName(String compoundName);
+    }
+
+    public static enum NameType
+    {
+        TRADITIONAL("Traditional"), PREFERRED("Preferred");
+
+        private String identifier;
+
+        private NameType(String identifier)
+        {
+            this.identifier = identifier;
+        }
+
+        public String getIdentifier()
+        {
+            return this.identifier;
+        }
+
+        public boolean matches(String identifier)
+        {
+            return Optional.ofNullable(identifier)
+                           .map(otherIdentifier -> otherIdentifier.equalsIgnoreCase(this.identifier))
+                           .orElse(false);
+        }
+    }
+
+    public static class CidAndName
+    {
+        private String               cid;
+        private String               name;
+        private Optional<CidAndName> parent;
+
+        public CidAndName(String cid, String name, Optional<CidAndName> parent)
+        {
+            super();
+            this.cid = cid;
+            this.name = name;
+            this.parent = parent;
+        }
+
+        public String getCid()
+        {
+            return this.cid;
+        }
+
+        public String getName()
+        {
+            return this.name;
+        }
+
+        public Optional<CidAndName> getParent()
+        {
+            return this.parent;
+        }
+
+        @Override
+        public String toString()
+        {
+            StringBuilder builder = new StringBuilder();
+            builder.append("CidAndName [cid=")
+                   .append(this.cid)
+                   .append(", name=")
+                   .append(this.name)
+                   .append("]");
+            return builder.toString();
+        }
+
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Compound
+    {
+        @JsonProperty("PC_Compounds")
+        private List<CompoundEntry> entries;
+
+        public List<CompoundEntry> getEntries()
+        {
+            return this.entries;
+        }
+
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public static class CompoundEntry
+        {
+            @JsonProperty
+            private OuterId id;
+
+            @JsonProperty
+            private List<CompoundProperty> props;
+
+            public OuterId getId()
+            {
+                return this.id;
+            }
+
+            public List<CompoundProperty> getProps()
+            {
+                return this.props;
+            }
+
+            public static class OuterId
+            {
+                @JsonProperty
+                private InnerId id;
+
+                public InnerId getId()
+                {
+                    return this.id;
+                }
+
+                public static class InnerId
+                {
+                    @JsonProperty
+                    private long cid;
+
+                    public long getCid()
+                    {
+                        return this.cid;
+                    }
+
+                }
+            }
+
+            @JsonIgnoreProperties(ignoreUnknown = true)
+            public static class CompoundProperty
+            {
+                @JsonProperty
+                private Urn urn;
+
+                @JsonProperty
+                private Value value;
+
+                public Urn getUrn()
+                {
+                    return this.urn;
+                }
+
+                public Value getValue()
+                {
+                    return this.value;
+                }
+
+                @JsonIgnoreProperties(ignoreUnknown = true)
+                public static class Value
+                {
+                    @JsonProperty
+                    private String ival;
+
+                    @JsonProperty
+                    private String sval;
+
+                    public String getIval()
+                    {
+                        return this.ival;
+                    }
+
+                    public String getSval()
+                    {
+                        return this.sval;
+                    }
+
+                }
+
+                @JsonIgnoreProperties(ignoreUnknown = true)
+                public static class Urn
+                {
+                    @JsonProperty
+                    private String label;
+
+                    @JsonProperty
+                    private String name;
+
+                    @JsonProperty
+                    private int datatype;
+
+                    @JsonProperty
+                    private String release;
+
+                    public String getLabel()
+                    {
+                        return this.label;
+                    }
+
+                    public String getName()
+                    {
+                        return this.name;
+                    }
+
+                    public int getDatatype()
+                    {
+                        return this.datatype;
+                    }
+
+                    public String getRelease()
+                    {
+                        return this.release;
+                    }
+
+                }
+            }
+        }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
